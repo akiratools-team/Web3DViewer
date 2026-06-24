@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback, useLayoutEffect } from "react";
-import { Canvas, useThree } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Environment, GizmoHelper, GizmoViewcube, Grid, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { Toolbar } from "@/src/components/ui/Toolbar";
 import {
@@ -11,19 +11,23 @@ import {
 } from "@/src/lib/converters/modelLoadPipeline";
 import { useModelExport } from "@/src/hooks/useModelExport";
 import { useViewerStore } from "@/src/store/useViewerStore";
+import { FIT_PADDING, PARSE_YIELD_MS } from "@/src/config/constants";
+import { computeModelStats, type ModelStats } from "@/src/lib/modelStats";
+import { extractSceneGraph, type SceneGraphNode } from "@/src/lib/sceneGraph";
 
 export type { ExportFormat } from "@/src/hooks/useModelExport";
-
-const FIT_PADDING = 1.5;
-/** Yield so Fullscreen3DLoader can paint before CPU-heavy parsing. */
-const PARSE_YIELD_MS = 50;
+export type { ModelStats } from "@/src/lib/modelStats";
+export type { SceneGraphNode } from "@/src/lib/sceneGraph";
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
 interface ThreeViewerProps {
   file: File;
+  selectedUUID?: string | null;
   onLoadComplete?: () => void;
   onLoadError?: (error: unknown) => void;
+  onStatsCalculated?: (stats: ModelStats | null) => void;
+  onSceneGraphExtracted?: (tree: SceneGraphNode[]) => void;
 }
 
 interface SceneBootstrapProps {
@@ -41,6 +45,80 @@ interface SceneModelProps {
 interface OrbitControlsLike {
   target: THREE.Vector3;
   update: () => void;
+}
+
+const HIGHLIGHT_EMISSIVE = 0x00aaff;
+const HIGHLIGHT_EMISSIVE_INTENSITY = 0.5;
+const FOCUS_ANIM_SPEED = 2.5;
+
+interface EmissiveSnapshot {
+  emissive: THREE.Color;
+  intensity: number;
+}
+
+function getStandardMaterials(mesh: THREE.Mesh): THREE.MeshStandardMaterial[] {
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  return materials.filter(
+    (mat): mat is THREE.MeshStandardMaterial =>
+      mat instanceof THREE.MeshStandardMaterial
+  );
+}
+
+function restoreAllHighlights(
+  root: THREE.Object3D,
+  cache: Map<THREE.Material, EmissiveSnapshot>
+) {
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    for (const mat of getStandardMaterials(child)) {
+      const snapshot = cache.get(mat);
+      if (!snapshot) continue;
+      mat.emissive.copy(snapshot.emissive);
+      mat.emissiveIntensity = snapshot.intensity;
+      mat.needsUpdate = true;
+      cache.delete(mat);
+    }
+  });
+}
+
+function applyHighlight(
+  mesh: THREE.Mesh,
+  cache: Map<THREE.Material, EmissiveSnapshot>
+) {
+  for (const mat of getStandardMaterials(mesh)) {
+    if (!cache.has(mat)) {
+      cache.set(mat, {
+        emissive: mat.emissive.clone(),
+        intensity: mat.emissiveIntensity,
+      });
+    }
+    mat.emissive.set(HIGHLIGHT_EMISSIVE);
+    mat.emissiveIntensity = HIGHLIGHT_EMISSIVE_INTENSITY;
+    mat.needsUpdate = true;
+  }
+}
+
+function collectMeshesForSelection(
+  root: THREE.Group,
+  selectedUUID: string
+): THREE.Mesh[] {
+  const selected = root.getObjectByProperty("uuid", selectedUUID) as
+    | THREE.Object3D
+    | undefined;
+
+  if (!selected) return [];
+
+  if (selected instanceof THREE.Mesh) return [selected];
+
+  const meshes: THREE.Mesh[] = [];
+  selected.traverse((child) => {
+    if (child instanceof THREE.Mesh) meshes.push(child);
+  });
+  return meshes;
+}
+
+function smoothStep(t: number): number {
+  return t * t * (3 - 2 * t);
 }
 
 // ── Auto-center / auto-fit utilities ──────────────────────────────────────
@@ -122,32 +200,197 @@ function SceneBootstrap({ model, onReady, loadId }: SceneBootstrapProps) {
 
 // ── SceneModel — renders the model preserving its full hierarchy ─────────
 
+function createStandardMaterial(color: string, wireframe: boolean) {
+  return new THREE.MeshStandardMaterial({
+    color,
+    wireframe,
+    roughness: 0.5,
+    metalness: 0.5,
+  });
+}
+
+function applyMeshMaterial(
+  mesh: THREE.Mesh,
+  color: string,
+  wireframe: boolean
+) {
+  if (mesh.geometry) {
+    mesh.geometry.computeVertexNormals();
+  }
+
+  const applyToMaterial = (current: THREE.Material): THREE.MeshStandardMaterial => {
+    if (current instanceof THREE.MeshStandardMaterial) {
+      current.color.set(color);
+      current.wireframe = wireframe;
+      current.roughness = 0.5;
+      current.metalness = 0.5;
+      current.needsUpdate = true;
+      return current;
+    }
+
+    current.dispose();
+    return createStandardMaterial(color, wireframe);
+  };
+
+  if (Array.isArray(mesh.material)) {
+    mesh.material = mesh.material.map((mat) => applyToMaterial(mat));
+    return;
+  }
+
+  if (mesh.material) {
+    mesh.material = applyToMaterial(mesh.material);
+    return;
+  }
+
+  mesh.material = createStandardMaterial(color, wireframe);
+}
+
 function SceneModel({ group, wireframe, color }: SceneModelProps) {
   const groupRef = useRef<THREE.Group>(null);
 
-  // Apply material overrides in-place when color / wireframe changes.
-  // We traverse on every render because the children are raw Three objects
-  // and R3F won't re-render them for prop changes.
+  // STL and similar loaders often create meshes with the default MeshBasicMaterial,
+  // which ignores scene lights. Traverse the loaded group directly and force PBR materials.
   useLayoutEffect(() => {
-    if (!groupRef.current) return;
-    groupRef.current.traverse((child) => {
+    group.traverse((child) => {
       if (child instanceof THREE.Mesh) {
-        const mat = child.material;
-        if (mat) {
-          mat.color.set(color);
-          mat.wireframe = wireframe;
-          mat.needsUpdate = true;
-        }
+        applyMeshMaterial(child, color, wireframe);
       }
     });
-  }, [color, wireframe]);
+  }, [group, color, wireframe]);
 
   return <primitive ref={groupRef} object={group} />;
 }
 
+// ── Selection highlight + camera focus ───────────────────────────────────
+
+interface SelectionControllerProps {
+  group: THREE.Group;
+  selectedUUID: string | null;
+  materialColor: string;
+  wireframe: boolean;
+}
+
+function SelectionController({
+  group,
+  selectedUUID,
+  materialColor,
+  wireframe,
+}: SelectionControllerProps) {
+  const controls = useThree((state) => state.controls);
+  const emissiveCache = useRef(new Map<THREE.Material, EmissiveSnapshot>());
+  const focusAnim = useRef<{
+    from: THREE.Vector3;
+    to: THREE.Vector3;
+    progress: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    restoreAllHighlights(group, emissiveCache.current);
+    focusAnim.current = null;
+
+    if (!selectedUUID) return;
+
+    const meshes = collectMeshesForSelection(group, selectedUUID);
+    for (const mesh of meshes) {
+      applyHighlight(mesh, emissiveCache.current);
+    }
+
+    const selected = group.getObjectByProperty("uuid", selectedUUID);
+    if (!selected || !controls) return;
+    if (!("target" in controls) || !("update" in controls)) return;
+
+    const ctrls = controls as unknown as OrbitControlsLike;
+    const box = new THREE.Box3().setFromObject(selected);
+    const center = box.getCenter(new THREE.Vector3());
+
+    focusAnim.current = {
+      from: ctrls.target.clone(),
+      to: center,
+      progress: 0,
+    };
+  }, [group, selectedUUID, materialColor, wireframe, controls]);
+
+  useFrame((_, delta) => {
+    const anim = focusAnim.current;
+    if (!anim || !controls) return;
+    if (!("target" in controls) || !("update" in controls)) return;
+
+    const ctrls = controls as unknown as OrbitControlsLike;
+    anim.progress = Math.min(anim.progress + delta * FOCUS_ANIM_SPEED, 1);
+    ctrls.target.lerpVectors(anim.from, anim.to, smoothStep(anim.progress));
+    ctrls.update();
+
+    if (anim.progress >= 1) {
+      focusAnim.current = null;
+    }
+  });
+
+  useEffect(() => {
+    return () => {
+      restoreAllHighlights(group, emissiveCache.current);
+    };
+  }, [group]);
+
+  return null;
+}
+
+// ── SceneGrid — infinite floor grid aligned to model base ────────────────
+
+function SceneGrid({ group, ready }: { group: THREE.Group; ready: boolean }) {
+  const [layout, setLayout] = useState({
+    gridY: 0,
+    cellSize: 1,
+    sectionSize: 5,
+  });
+
+  useLayoutEffect(() => {
+    if (!ready) return;
+
+    const box = new THREE.Box3().setFromObject(group);
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z, 0.001);
+    const cell = maxDim / 20;
+
+    const belowModel = box.min.y - maxDim * 0.002;
+    const gridY = Math.min(belowModel, -0.01);
+
+    setLayout({
+      gridY,
+      cellSize: cell,
+      sectionSize: cell * 5,
+    });
+  }, [group, ready]);
+
+  if (!ready) return null;
+
+  return (
+    <Grid
+      position={[0, layout.gridY, 0]}
+      infiniteGrid
+      cellSize={layout.cellSize}
+      sectionSize={layout.sectionSize}
+      cellColor="#6F7D8C"
+      sectionColor="#A9B1B8"
+      cellThickness={0.75}
+      sectionThickness={1.1}
+      fadeDistance={50}
+      fadeStrength={5}
+      side={THREE.DoubleSide}
+      renderOrder={-1}
+    />
+  );
+}
+
 // ── ThreeViewer ──────────────────────────────────────────────────────────
 
-export function ThreeViewer({ file, onLoadComplete, onLoadError }: ThreeViewerProps) {
+export function ThreeViewer({
+  file,
+  selectedUUID = null,
+  onLoadComplete,
+  onLoadError,
+  onStatsCalculated,
+  onSceneGraphExtracted,
+}: ThreeViewerProps) {
   const [model, setModel] = useState<THREE.Group | null>(null);
   const [isParsing, setIsParsing] = useState(true);
   const [isSceneReady, setIsSceneReady] = useState(false);
@@ -193,6 +436,8 @@ export function ThreeViewer({ file, onLoadComplete, onLoadError }: ThreeViewerPr
     setIsParsing(true);
     setIsSceneReady(false);
     setCoverVisible(true);
+    onStatsCalculated?.(null);
+    onSceneGraphExtracted?.([]);
 
     // Dispose previous model before loading a new one
     if (modelRef.current) {
@@ -240,6 +485,12 @@ export function ThreeViewer({ file, onLoadComplete, onLoadError }: ThreeViewerPr
     };
   }, []);
 
+  useEffect(() => {
+    if (!isSceneReady || !model) return;
+    onStatsCalculated?.(computeModelStats(model));
+    onSceneGraphExtracted?.(extractSceneGraph(model));
+  }, [isSceneReady, model, onStatsCalculated, onSceneGraphExtracted]);
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   const showViewer = !isParsing && model !== null;
@@ -260,14 +511,40 @@ export function ThreeViewer({ file, onLoadComplete, onLoadError }: ThreeViewerPr
           }
         }}
       >
-        <ambientLight intensity={0.6} />
-        <directionalLight position={[5, 10, 7]} intensity={1.2} />
-        <directionalLight position={[-3, -2, 4]} intensity={0.4} />
+        <ambientLight intensity={0.5} />
+        <directionalLight position={[10, 10, 10]} intensity={1.5} castShadow />
+        <Environment preset="city" />
 
         {showViewer && (
           <>
+            <SceneGrid group={model!} ready={isSceneReady} />
             <SceneModel group={model!} wireframe={wireframe} color={materialColor} />
-            <OrbitControls makeDefault enableDamping dampingFactor={0.08} />
+            {isSceneReady && (
+              <SelectionController
+                group={model!}
+                selectedUUID={selectedUUID}
+                materialColor={materialColor}
+                wireframe={wireframe}
+              />
+            )}
+            <OrbitControls
+              makeDefault
+              enableDamping
+              dampingFactor={0.08}
+              minPolarAngle={0}
+              maxPolarAngle={Math.PI}
+            />
+            <GizmoHelper alignment="bottom-right" margin={[72, 120]}>
+              <GizmoViewcube
+                faces={["Right", "Left", "Top", "Bottom", "Front", "Back"]}
+                color="#A9C9D1"
+                hoverColor="#5FBFF9"
+                textColor="#111111"
+                strokeColor="#333333"
+                opacity={0.96}
+                font="600 18px Inter, system-ui, sans-serif"
+              />
+            </GizmoHelper>
 
             {!isSceneReady && (
               <SceneBootstrap

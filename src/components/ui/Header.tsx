@@ -5,7 +5,7 @@ import { ThemeToggle } from "@/src/components/ui/ThemeToggle";
 
 export function Header() {
   return (
-    <header className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-neutral-800 bg-slate-50/80 dark:bg-neutral-950/80 backdrop-blur-md flex-shrink-0 transition-colors duration-500 ease-in-out">
+    <header className="relative z-50 overflow-visible flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-neutral-800 bg-slate-50/80 dark:bg-neutral-950/80 backdrop-blur-md flex-shrink-0 transition-colors duration-500 ease-in-out">
       <a
         href="/"
         className="flex items-center gap-3 group cursor-pointer"
@@ -26,7 +26,9 @@ export function Header() {
         </span>
       </a>
 
-      <ThemeToggle />
+      <div className="relative z-50">
+        <ThemeToggle />
+      </div>
     </header>
   );
 }

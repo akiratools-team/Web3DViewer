@@ -2,6 +2,7 @@
 
 import { useRef } from "react";
 import { Upload, X } from "lucide-react";
+import { ACCEPTED_FILE_EXTENSIONS_ATTR } from "@/src/config/constants";
 
 interface FileInputProps {
   onFile: (file: File) => void;
@@ -25,7 +26,7 @@ export function FileInput({ onFile, onClose }: FileInputProps) {
       <input
         ref={inputRef}
         type="file"
-        accept=".stl,.obj,.fbx,.gltf,.glb,.3ds,.dae,.ply,.off,.wrl,.vrml,.step,.stp,.iges,.igs,.3dm,.bim"
+        accept={ACCEPTED_FILE_EXTENSIONS_ATTR}
         className="hidden"
         onChange={handleChange}
       />

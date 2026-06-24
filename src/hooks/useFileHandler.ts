@@ -1,18 +1,10 @@
 import { useState, useCallback, DragEvent } from "react";
+import {
+  ACCEPTED_EXTENSIONS,
+  fileExtensionFromName,
+} from "@/src/config/constants";
 
-const ACCEPTED_EXTENSIONS = new Set([
-  // Mesh formats
-  ".stl", ".obj", ".fbx",
-  ".gltf", ".glb",
-  ".3ds",
-  ".dae", ".ply", ".wrl", ".vrml", ".off",
-  // CAD (occt-import-js)
-  ".step", ".stp", ".iges", ".igs",
-  // Rhino
-  ".3dm",
-  // dotBIM
-  ".bim",
-]);
+const ACCEPTED_EXTENSIONS_SET = new Set<string>(ACCEPTED_EXTENSIONS);
 
 interface UseFileHandlerOptions {
   /** Called when a file passes validation and loading begins. */
@@ -49,9 +41,9 @@ export function useFileHandler(
 
   const validateAndSet = useCallback(
     (candidate: File) => {
-      const ext = "." + candidate.name.split(".").pop()?.toLowerCase();
-      if (!ACCEPTED_EXTENSIONS.has(ext)) {
-        const message = `Unsupported format "${ext}". Accepted: ${[...ACCEPTED_EXTENSIONS].join(", ")}`;
+      const ext = fileExtensionFromName(candidate.name);
+      if (!ACCEPTED_EXTENSIONS_SET.has(ext)) {
+        const message = `Unsupported format "${ext}". Accepted: ${[...ACCEPTED_EXTENSIONS_SET].join(", ")}`;
         setError(message);
         setFile(null);
         onInvalidFile?.(message);

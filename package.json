@@ -6,7 +6,9 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "setup-ifc": "node scripts/copy-ifc-wasm.js",
+    "postinstall": "node scripts/install-ifc-loader.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
@@ -19,7 +21,6 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-hot-toast": "^2.6.0",
-    "rhino3dm": "^8.0.1",
     "three": "^0.184.0",
     "zustand": "^5.0.14"
   },

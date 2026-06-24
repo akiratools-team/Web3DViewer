@@ -1,6 +1,8 @@
 "use client";
 
 import * as THREE from "three";
+import { DEFAULT_MATERIAL_COLOR_NUM } from "@/src/config/constants";
+import { cadExtensionFromFileName } from "@/src/lib/converters/cadFormats";
 
 // ── Local types for occt-import-js ───────────────────────────────────────────
 //
@@ -94,7 +96,7 @@ function toNumberArray(value: unknown): number[] | null {
     return value.map((v) => Number(v));
   }
   if (ArrayBuffer.isView(value)) {
-    return Array.from(value as ArrayLike<number>);
+    return Array.from(value as any);
   }
   return null;
 }
@@ -348,7 +350,7 @@ function buildMesh(meshData: OcctMeshData): THREE.Mesh | null {
   // is still visible before the user activates the color-override picker.
   const cadColor = meshData.color
     ? new THREE.Color(meshData.color[0], meshData.color[1], meshData.color[2])
-    : new THREE.Color(0x8b9bb4);
+    : new THREE.Color(DEFAULT_MATERIAL_COLOR_NUM);
 
   mesh.material = new THREE.MeshStandardMaterial({
     color: cadColor,
@@ -453,7 +455,13 @@ function buildGroupFromResult(result: OcctResult): THREE.Group {
  * The WASM binary must be served from /public/occt-import-js.wasm.
  */
 export async function loadCADFile(file: File): Promise<THREE.Group> {
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const cadExt = cadExtensionFromFileName(file.name);
+  if (!cadExt) {
+    throw new Error(
+      `Unsupported CAD format. Expected .step, .stp, .iges, or .igs.`
+    );
+  }
+  const ext = cadExt;
 
   // Read the file before spawning the worker so that any FileReader error
   // surfaces as a normal Promise rejection rather than a worker error.

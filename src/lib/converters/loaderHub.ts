@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { resolveClass } from "./resolveExport";
 
 // ── FileReader promise helpers ────────────────────────────────────────────────
 
@@ -21,7 +20,7 @@ function readAsText(file: File): Promise<string> {
   });
 }
 
-// ── Format-specific loaders (all use async dynamic import + resolveExport) ─────
+// ── Format-specific loaders (all use async dynamic import) ─────
 
 async function loadSTL(file: File): Promise<THREE.Group> {
   const buffer = await readAsArrayBuffer(file);
@@ -70,30 +69,54 @@ async function loadGLTF(file: File): Promise<THREE.Group> {
   });
 }
 
-async function load3DS(file: File): Promise<THREE.Group> {
-  const buffer = await readAsArrayBuffer(file);
-  const { TDSLoader } = await import("three/examples/jsm/loaders/TDSLoader.js");
-  try {
-    return new TDSLoader().parse(buffer) as THREE.Group;
-  } catch {
-    throw new Error("Failed to parse 3DS file.");
-  }
-}
-
 async function loadPLY(file: File): Promise<THREE.Group> {
   const buffer = await readAsArrayBuffer(file);
   const { PLYLoader } = await import("three/examples/jsm/loaders/PLYLoader.js");
   try {
-    return new PLYLoader().parse(buffer) as THREE.Group;
-  } catch {
+    const parsed = new PLYLoader().parse(buffer);
+    const group = new THREE.Group();
+
+    if ((parsed as THREE.BufferGeometry).isBufferGeometry) {
+      const geometry = parsed as THREE.BufferGeometry;
+      if (!geometry.getAttribute("normal")) {
+        geometry.computeVertexNormals();
+      }
+      group.add(
+        new THREE.Mesh(
+          geometry,
+          new THREE.MeshStandardMaterial({ side: THREE.DoubleSide })
+        )
+      );
+    } else if (parsed instanceof THREE.Object3D) {
+      group.add(parsed);
+    } else {
+      throw new Error("PLYLoader returned an unsupported object type.");
+    }
+
+    return group;
+  } catch (err) {
+    if (err instanceof Error && err.message.includes("unsupported object type")) {
+      throw err;
+    }
     throw new Error("Failed to parse PLY file.");
+  }
+}
+
+async function load3MF(file: File): Promise<THREE.Group> {
+  const buffer = await readAsArrayBuffer(file);
+  const { ThreeMFLoader } = await import(
+    "three/examples/jsm/loaders/3MFLoader.js"
+  );
+  try {
+    return new ThreeMFLoader().parse(buffer) as THREE.Group;
+  } catch {
+    throw new Error("Failed to parse 3MF file.");
   }
 }
 
 async function loadOFF(file: File): Promise<THREE.Group> {
   const text = await readAsText(file);
-  const mod = await import("@/src/lib/converters/OFFLoader");
-  const OFFLoader = resolveClass<typeof OFFLoader>(mod, "OFFLoader");
+  const { OFFLoader } = await import("@/src/lib/converters/OFFLoader");
   const geo = new OFFLoader().parse(text);
   geo.computeVertexNormals();
   const group = new THREE.Group();
@@ -101,31 +124,9 @@ async function loadOFF(file: File): Promise<THREE.Group> {
   return group;
 }
 
-async function loadDAE(file: File): Promise<THREE.Group> {
-  const text = await readAsText(file);
-  const { ColladaLoader } = await import("three/examples/jsm/loaders/ColladaLoader.js");
-  try {
-    const result = new ColladaLoader().parse(text);
-    return result.scene;
-  } catch {
-    throw new Error("Failed to parse DAE/Collada file.");
-  }
-}
-
-async function loadWRL(file: File): Promise<THREE.Group> {
-  const text = await readAsText(file);
-  const { VRMLLoader } = await import("three/examples/jsm/loaders/VRMLLoader.js");
-  try {
-    return new VRMLLoader().parse(text) as THREE.Group;
-  } catch {
-    throw new Error("Failed to parse WRL/VRML file.");
-  }
-}
-
-async function loadIFCA(file: File): Promise<THREE.Group> {
-  // IFC would need a proper loader - for now delegate to a generic loader
-  // This is a placeholder - IFC support requires a dedicated library
-  throw new Error("IFC format not yet supported. Please convert to STEP/GLTF first.");
+async function loadIFC(file: File): Promise<THREE.Group> {
+  const { loadIFC: loadIFCFile } = await import("./ifcLoader");
+  return (await loadIFCFile(file)) as THREE.Group;
 }
 
 // ── Hub & Spoke entry point ───────────────────────────────────────────────────
@@ -137,6 +138,11 @@ async function loadIFCA(file: File): Promise<THREE.Group> {
  * CAD formats (.step, .stp, .iges, .igs) are routed to cadLoader which
  * uses occt-import-js (OpenCascade compiled to WASM) and runs in a Web Worker.
  */
+async function loadCAD(file: File): Promise<THREE.Group> {
+  const { loadCADFile } = await import("./cadLoader");
+  return loadCADFile(file);
+}
+
 export async function loadModel(file: File): Promise<THREE.Group> {
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
 
@@ -154,44 +160,23 @@ export async function loadModel(file: File): Promise<THREE.Group> {
     case "glb":
       return loadGLTF(file);
 
-    case "3ds":
-      return load3DS(file);
-
     case "ply":
       return loadPLY(file);
+
+    case "3mf":
+      return load3MF(file);
 
     case "off":
       return loadOFF(file);
 
-    case "dae":
-      return loadDAE(file);
-
-    case "wrl":
-    case "vrml":
-      return loadWRL(file);
-
     case "ifc":
-      return loadIFCA(file);
+      return (await loadIFC(file)) as THREE.Group;
 
     case "step":
     case "stp":
     case "iges":
-    case "igs": {
-      // Dynamic import — cadLoader + its WASM dependency load on demand
-      const { loadCADFile } = await import("./cadLoader");
-      return loadCADFile(file);
-    }
-
-    // 3DM is handled by Rhino loader
-    case "3dm": {
-      const { loadRhinoFile } = await import("./rhinoLoader");
-      return loadRhinoFile(file);
-    }
-
-    case "bim": {
-      const { loadBIMFile } = await import("./BIMLoader");
-      return loadBIMFile(file);
-    }
+    case "igs":
+      return loadCAD(file);
 
     default:
       throw new Error(`Unsupported format: .${ext}`);

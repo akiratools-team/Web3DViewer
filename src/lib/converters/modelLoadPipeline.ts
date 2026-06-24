@@ -1,18 +1,25 @@
 import * as THREE from "three";
 import { loadModel } from "./loaderHub";
-import { parseModelError, MODEL_ERROR_TIMEOUT, MODEL_ERROR_FALLBACK } from "@/src/utils/errorHandler";
-
-/** Maximum time allowed for parsing a single file (ms). */
-export const MODEL_LOAD_TIMEOUT_MS = 45_000;
+import { parseModelError } from "@/src/utils/errorHandler";
+import { MODEL_LOAD_TIMEOUT_MS } from "@/src/config/constants";
 
 const LOAD_TIMEOUT_CODE = "LOAD_TIMEOUT";
 
-/** @deprecated Use MODEL_ERROR_FALLBACK from @/src/utils/errorHandler */
-export const LOAD_ERROR_GENERIC = MODEL_ERROR_FALLBACK;
-export const LOAD_ERROR_TIMEOUT = MODEL_ERROR_TIMEOUT;
-
 /** Release GPU memory for a loaded model tree. */
 export function disposeModel(object: THREE.Object3D): void {
+  const ifcLoader = object.userData?.ifcLoader as
+    | { ifcManager?: { close: (modelID: number) => void } }
+    | undefined;
+  const ifcModelID = object.userData?.ifcModelID as number | undefined;
+
+  if (ifcLoader?.ifcManager?.close && ifcModelID !== undefined) {
+    try {
+      ifcLoader.ifcManager.close(ifcModelID);
+    } catch {
+      // IFC model may already be closed.
+    }
+  }
+
   object.traverse((child) => {
     const mesh = child as THREE.Mesh;
     if (!mesh.isMesh) return;

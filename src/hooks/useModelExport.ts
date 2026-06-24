@@ -16,7 +16,6 @@ export type ExportFormat =
   | "ply-text"
   | "ply-binary"
   | "off"
-  | "3dm"
   | "bim";
 
 export const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
@@ -28,7 +27,6 @@ export const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
   "ply-text": ".ply",
   "ply-binary": ".ply",
   off: ".off",
-  "3dm": ".3dm",
   bim: ".bim",
 };
 
@@ -150,18 +148,6 @@ export function useModelExport(model: THREE.Group | null) {
           const str = new BIMExporter().parse(model);
           triggerDownload(
             new Blob([str], { type: "application/json" }),
-            `model${ext}`
-          );
-          break;
-        }
-
-        case "3dm": {
-          const { RhinoExporter } = await import(
-            "@/src/lib/converters/RhinoExporter"
-          );
-          const buf = await new RhinoExporter().parse(model);
-          triggerDownload(
-            new Blob([buf], { type: "application/octet-stream" }),
             `model${ext}`
           );
           break;

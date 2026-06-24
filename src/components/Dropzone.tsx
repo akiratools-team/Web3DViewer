@@ -1,12 +1,17 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import toast from "react-hot-toast";
 import { UploadCloud, X } from "lucide-react";
 import { useFileHandler } from "@/src/hooks/useFileHandler";
+import { ACCEPTED_FILE_EXTENSIONS_ATTR } from "@/src/config/constants";
 import { FileMenu } from "@/src/components/ui/FileMenu";
+import { ModelDetailsSidebar } from "@/src/components/ui/ModelDetailsSidebar";
+import { SceneGraphSidebar } from "@/src/components/ui/SceneGraphSidebar";
 import { notifyModelError } from "@/src/utils/errorHandler";
+import type { ModelStats } from "@/src/lib/modelStats";
+import type { SceneGraphNode } from "@/src/lib/sceneGraph";
 
 const ThreeViewer = dynamic(
   () =>
@@ -39,9 +44,28 @@ export function Dropzone({ onLoadingStart, onLoadingEnd }: DropzoneProps) {
     onInvalidFile: (message) => toast.error(message, { id: "file-validation-error" }),
   });
   const inputRef = useRef<HTMLInputElement>(null);
+  const [modelStats, setModelStats] = useState<ModelStats | null>(null);
+  const [sceneGraph, setSceneGraph] = useState<SceneGraphNode[]>([]);
+  const [selectedUUID, setSelectedUUID] = useState<string | null>(null);
+
+  const handleStatsCalculated = useCallback((stats: ModelStats | null) => {
+    setModelStats(stats);
+  }, []);
+
+  const handleSceneGraphExtracted = useCallback((tree: SceneGraphNode[]) => {
+    setSceneGraph(tree);
+    setSelectedUUID(null);
+  }, []);
+
+  const handleSelectUUID = useCallback((uuid: string | null) => {
+    setSelectedUUID(uuid);
+  }, []);
 
   const handleClearFile = () => {
     onLoadingEnd?.();
+    setModelStats(null);
+    setSceneGraph([]);
+    setSelectedUUID(null);
     clearFile();
   };
 
@@ -83,45 +107,88 @@ export function Dropzone({ onLoadingStart, onLoadingEnd }: DropzoneProps) {
   if (file) {
     return (
       <div
-        className="relative w-full max-w-5xl h-[80vh] rounded-2xl overflow-hidden bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 transition-colors duration-300 mx-auto"
+        className="flex flex-col lg:flex-row w-full h-full min-h-0 gap-2"
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
       >
-        <ThreeViewer
-          key={`viewer-${loadSessionId}`}
-          file={file}
-          onLoadComplete={handleLoadComplete}
-          onLoadError={handleLoadError}
-        />
-
-        {/* Top-left: file open buttons */}
-        <FileMenu onFile={loadFile} />
-
-        {/* File info badge */}
-        <div className="absolute bottom-4 left-4 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border border-zinc-200 dark:border-zinc-700 rounded-lg px-3 py-2 pointer-events-none">
-          <p className="text-zinc-700 dark:text-zinc-300 text-xs font-medium truncate max-w-[200px]">
-            {file.name}
-          </p>
-          <p className="text-zinc-400 dark:text-zinc-600 text-xs">
-            {(file.size / 1024 / 1024).toFixed(2)} MB
-          </p>
+        {/* Left — scene graph */}
+        <div className="w-full lg:w-72 shrink-0 min-h-0 h-[220px] lg:h-full order-2 lg:order-1">
+          {sceneGraph.length > 0 ? (
+            <SceneGraphSidebar
+              nodes={sceneGraph}
+              selectedUUID={selectedUUID}
+              onSelect={handleSelectUUID}
+            />
+          ) : (
+            <aside className="flex flex-col h-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-700 bg-zinc-50/80 dark:bg-zinc-800/50">
+                <h2 className="text-[10px] uppercase tracking-widest text-zinc-500 dark:text-zinc-500">
+                  Meshes &amp; Materials
+                </h2>
+              </div>
+              <div className="flex-1 flex items-center justify-center px-4 py-8">
+                <p className="text-sm text-zinc-400 dark:text-zinc-500 text-center">
+                  Building scene graph…
+                </p>
+              </div>
+            </aside>
+          )}
         </div>
 
-        {/*
-          Top-right: remove button.
-        */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleClearFile();
-          }}
-          aria-label="Remove file"
-          className="absolute top-4 right-4 flex items-center gap-1.5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border border-zinc-200 dark:border-zinc-700 hover:border-red-400/60 dark:hover:border-red-500/60 hover:text-red-500 dark:hover:text-red-400 text-zinc-500 dark:text-zinc-400 transition-colors rounded-lg px-3 py-1.5 text-xs font-medium cursor-pointer"
-        >
-          <X className="w-3.5 h-3.5" />
-          Remove
-        </button>
+        {/* Center — viewport */}
+        <div className="relative flex-1 min-h-0 rounded-xl overflow-hidden bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 transition-colors duration-300 order-1 lg:order-2">
+          <ThreeViewer
+            key={`viewer-${loadSessionId}`}
+            file={file}
+            selectedUUID={selectedUUID}
+            onLoadComplete={handleLoadComplete}
+            onLoadError={handleLoadError}
+            onStatsCalculated={handleStatsCalculated}
+            onSceneGraphExtracted={handleSceneGraphExtracted}
+          />
+
+          <FileMenu onFile={loadFile} />
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleClearFile();
+            }}
+            aria-label="Remove file"
+            className="absolute top-4 right-4 z-10 flex items-center gap-1.5 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border border-zinc-200 dark:border-zinc-700 hover:border-red-400/60 dark:hover:border-red-500/60 hover:text-red-500 dark:hover:text-red-400 text-zinc-500 dark:text-zinc-400 transition-colors rounded-lg px-3 py-1.5 text-xs font-medium cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+            Remove
+          </button>
+        </div>
+
+        {/* Right — model details */}
+        <div className="w-full lg:w-72 shrink-0 min-h-0 h-[280px] lg:h-full order-3">
+          {modelStats ? (
+            <ModelDetailsSidebar
+              stats={modelStats}
+              fileName={file.name}
+              fileSizeBytes={file.size}
+            />
+          ) : (
+            <aside className="flex flex-col h-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-sm overflow-hidden">
+              <div className="px-4 py-3 border-b border-zinc-200 dark:border-zinc-700 bg-zinc-50/80 dark:bg-zinc-800/50">
+                <h2 className="text-[10px] uppercase tracking-widest text-zinc-500 dark:text-zinc-500 mb-2">
+                  Model Details
+                </h2>
+                <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200 truncate">
+                  {file.name}
+                </p>
+              </div>
+              <div className="flex-1 flex items-center justify-center px-4 py-8">
+                <p className="text-sm text-zinc-400 dark:text-zinc-500 text-center">
+                  Calculating geometry stats…
+                </p>
+              </div>
+            </aside>
+          )}
+        </div>
       </div>
     );
   }
@@ -139,7 +206,7 @@ export function Dropzone({ onLoadingStart, onLoadingEnd }: DropzoneProps) {
   const borderStyle = isDragActive ? "border-solid" : "border-dashed";
 
   return (
-    <div className="relative w-full max-w-5xl h-[80vh] mx-auto">
+    <div className="relative w-full h-full min-h-0">
       <FileMenu onFile={loadFile} />
 
       <div
@@ -162,7 +229,7 @@ export function Dropzone({ onLoadingStart, onLoadingEnd }: DropzoneProps) {
         <input
           ref={inputRef}
           type="file"
-          accept=".stl,.obj,.fbx,.gltf,.glb,.3ds,.dae,.ply,.off,.wrl,.vrml,.step,.stp,.iges,.igs,.3dm,.bim"
+          accept={ACCEPTED_FILE_EXTENSIONS_ATTR}
           className="hidden"
           onChange={handleInputChange}
         />
@@ -189,7 +256,7 @@ export function Dropzone({ onLoadingStart, onLoadingEnd }: DropzoneProps) {
             {isDragActive ? "Release to upload" : "Drag & Drop your 3D file here"}
           </p>
           <p className="text-sm font-light text-neutral-500 dark:text-neutral-500 leading-relaxed transition-colors duration-300 ease-in-out">
-            or click to browse &mdash; STL &bull; OBJ &bull; FBX &bull; GLTF / GLB &bull; 3DS &bull; DAE &bull; PLY &bull; OFF &bull; WRL &bull; VRML &bull; STEP &bull; IGES &bull; 3DM &bull; BIM
+            or click to browse &mdash; STL &bull; OBJ &bull; FBX &bull; GLTF / GLB &bull; PLY &bull; 3MF &bull; OFF &bull; STEP &bull; IGES &bull; IFC
           </p>
         </div>
       </div>

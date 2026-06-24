@@ -29,7 +29,6 @@ const EXPORT_OPTIONS: { value: ExportFormat; label: string }[] = [
   { value: "ply-text", label: "Polygon File Format Text (.ply)" },
   { value: "ply-binary", label: "Polygon File Format Binary (.ply)" },
   { value: "off", label: "Object File Format Text (.off)" },
-  { value: "3dm", label: "Rhinoceros 3D (.3dm)" },
   { value: "bim", label: "Dotbim (.bim)" },
 ];
 

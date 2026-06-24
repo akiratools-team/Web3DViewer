@@ -2,6 +2,10 @@
 
 import { create } from "zustand";
 import type { ExportFormat } from "@/src/hooks/useModelExport";
+import {
+  DEFAULT_EXPORT_FORMAT,
+  DEFAULT_MATERIAL_COLOR,
+} from "@/src/config/constants";
 
 interface ViewerState {
   wireframe: boolean;
@@ -18,9 +22,9 @@ interface ViewerState {
 
 export const useViewerStore = create<ViewerState>((set) => ({
   wireframe: false,
-  materialColor: "#8b9bb4",
+  materialColor: DEFAULT_MATERIAL_COLOR,
   canvasBg: null,
-  exportFormat: "glb",
+  exportFormat: DEFAULT_EXPORT_FORMAT,
 
   setWireframe: (value) => set({ wireframe: value }),
   toggleWireframe: () => set((state) => ({ wireframe: !state.wireframe })),

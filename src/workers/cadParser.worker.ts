@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 
 import occtimportjs from "occt-import-js";
-import { CAD_TESSELLATION_PARAMS } from "@/src/lib/converters/cadTessellation";
+import { readCadFileWithOcct } from "@/src/lib/converters/cadFormats";
 
 type WorkerRequest = {
   buffer: ArrayBuffer;
@@ -151,16 +151,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
         path.endsWith(".wasm") ? "/occt-import-js.wasm" : path,
     });
 
-    const fileBuffer = new Uint8Array(buffer);
-    let raw: RawOcctResult;
-
-    if (ext === "step" || ext === "stp") {
-      raw = occt.ReadStepFile(fileBuffer, CAD_TESSELLATION_PARAMS) as RawOcctResult;
-    } else if (ext === "iges" || ext === "igs") {
-      raw = occt.ReadIgesFile(fileBuffer, CAD_TESSELLATION_PARAMS) as RawOcctResult;
-    } else {
-      throw new Error(`Unsupported CAD format: .${ext}`);
-    }
+    const raw = readCadFileWithOcct(occt, buffer, ext) as RawOcctResult;
 
     if (!raw?.success) {
       throw new Error("Failed to parse CAD file. The file might be corrupted.");
